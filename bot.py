@@ -20,8 +20,26 @@ class StopRequested(Exception):
     pass
 
 
+def _esc_pressed() -> bool:
+    try:
+        import keyboard
+
+        return keyboard.is_pressed(STOP_KEY)
+    except ImportError:
+        pass
+
+    if sys.platform == "win32":
+        import msvcrt
+
+        while msvcrt.kbhit():
+            if msvcrt.getch() == b"\x1b":
+                return True
+
+    return False
+
+
 def check_stop() -> None:
-    if pyautogui.isKeyDown(STOP_KEY):
+    if _esc_pressed():
         raise StopRequested()
 
 

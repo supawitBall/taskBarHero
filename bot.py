@@ -92,7 +92,7 @@ def ensure_stash_has_space(config: BotConfig, template_bgr, current_tab: int) ->
         )
 
     if empty_count == 0:
-        print("Tab 2 เต็ม → หยุดบอท")
+        print(" ===== Item เต็มระบบหยุดทำงาน ===== ")
         return current_tab, False
 
     return current_tab, True
@@ -106,8 +106,7 @@ def run_bot(config: BotConfig) -> None:
 
     print("เริ่มทำงาน (กด Esc เพื่อหยุด, ขยับเมาส์มุมจอ = FAILSAFE)")
     print("สแกนเฉพาะตารางกระเป๋า Hero — ไม่รวมช่อง equipment")
-    switch_to_tab(1, config)
-    current_tab = 1
+    stash_initialized = False
     time.sleep(0.5)
 
     while True:
@@ -121,8 +120,14 @@ def run_bot(config: BotConfig) -> None:
         )
 
         if not items:
-            print(f"กระเป๋า Hero ว่าง → หยุด (ย้ายไปแล้ว {moved_count} ชิ้น)")
+            print("ไม่พบ item ในกระเป๋า Hero")
             break
+
+        if not stash_initialized:
+            switch_to_tab(1, config)
+            current_tab = 1
+            stash_initialized = True
+            time.sleep(config.action_delay_sec)
 
         current_tab, has_space = ensure_stash_has_space(
             config, stash_template_bgr, current_tab

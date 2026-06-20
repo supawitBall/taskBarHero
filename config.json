@@ -1,0 +1,13 @@
+{
+  "stash_roi": { "x": 0, "y": 0, "w": 0, "h": 0 },
+  "hero_bag_roi": { "x": 0, "y": 0, "w": 0, "h": 0 },
+  "tab1": { "x": 0, "y": 0 },
+  "tab2": { "x": 0, "y": 0 },
+  "stash_grid": { "rows": 10, "cols": 8 },
+  "hero_bag_grid": { "rows": 5, "cols": 8 },
+  "empty_slot_template": "templates/stash_empty_slot.png",
+  "hero_bag_empty_slot_template": "templates/hero_bag_empty_slot.png",
+  "match_threshold": 0.85,
+  "action_delay_sec": 0.25,
+  "scan_delay_sec": 0.1
+}

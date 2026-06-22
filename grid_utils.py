@@ -1,4 +1,4 @@
-"""Grid scanning utilities for stash/hero inventory detection."""
+"""Point-based slot detection for hero row 1 and stash last slot."""
 
 from __future__ import annotations
 
@@ -14,20 +14,29 @@ from PIL import Image
 
 
 @dataclass(frozen=True)
-class ROI:
+class Point:
     x: int
     y: int
+
+    @classmethod
+    def from_dict(cls, data: dict[str, int]) -> "Point":
+        return cls(x=data["x"], y=data["y"])
+
+
+@dataclass(frozen=True)
+class Size:
     w: int
     h: int
 
     @classmethod
-    def from_dict(cls, data: dict[str, int]) -> "ROI":
-        return cls(x=data["x"], y=data["y"], w=data["w"], h=data["h"])
+    def from_dict(cls, data: dict[str, int]) -> "Size":
+        return cls(w=data["w"], h=data["h"])
 
 
 @dataclass(frozen=True)
-class GridSpec:
-    rows: int
+class HeroRow1:
+    first_cell: Point
+    last_cell: Point
     cols: int
 
 
@@ -50,14 +59,12 @@ def _resolve_template(base_dir: Path, key: str, data: dict[str, Any]) -> Path:
 
 @dataclass
 class BotConfig:
-    stash_roi: ROI
-    hero_bag_roi: ROI
-    tab1: tuple[int, int]
-    tab2: tuple[int, int]
-    stash_grid: GridSpec
-    hero_bag_grid: GridSpec
-    stash_empty_slot_template: Path
+    hero_row1: HeroRow1
+    stash_last_slot: Point
+    stash_tabs: list[Point]
     hero_bag_empty_slot_template: Path
+    stash_last_slot_empty_template: Path
+    slot_crop_size: Size
     match_threshold: float
     action_delay_sec: float
     scan_delay_sec: float
@@ -69,30 +76,23 @@ class BotConfig:
             data = json.load(f)
 
         base_dir = path.parent
-
-        hero_roi_data = data.get("hero_bag_roi", data.get("hero_roi"))
-        hero_grid_data = data.get("hero_bag_grid", data.get("hero_grid"))
-        hero_template_key = (
-            "hero_bag_empty_slot_template"
-            if "hero_bag_empty_slot_template" in data
-            else "hero_empty_slot_template"
-        )
-        if hero_template_key not in data:
-            hero_template_key = "empty_slot_template"
+        hero_data = data["hero_row1"]
 
         return cls(
-            stash_roi=ROI.from_dict(data["stash_roi"]),
-            hero_bag_roi=ROI.from_dict(hero_roi_data),
-            tab1=(data["tab1"]["x"], data["tab1"]["y"]),
-            tab2=(data["tab2"]["x"], data["tab2"]["y"]),
-            stash_grid=GridSpec(**data["stash_grid"]),
-            hero_bag_grid=GridSpec(**hero_grid_data),
-            stash_empty_slot_template=_resolve_template(
-                base_dir, "empty_slot_template", data
+            hero_row1=HeroRow1(
+                first_cell=Point.from_dict(hero_data["first_cell"]),
+                last_cell=Point.from_dict(hero_data["last_cell"]),
+                cols=int(hero_data["cols"]),
             ),
+            stash_last_slot=Point.from_dict(data["stash_last_slot"]),
+            stash_tabs=[Point.from_dict(tab) for tab in data["stash_tabs"]],
             hero_bag_empty_slot_template=_resolve_template(
-                base_dir, hero_template_key, data
+                base_dir, "hero_bag_empty_slot_template", data
             ),
+            stash_last_slot_empty_template=_resolve_template(
+                base_dir, "stash_last_slot_empty_template", data
+            ),
+            slot_crop_size=Size.from_dict(data["slot_crop_size"]),
             match_threshold=float(data.get("match_threshold", 0.85)),
             action_delay_sec=float(data.get("action_delay_sec", 0.25)),
             scan_delay_sec=float(data.get("scan_delay_sec", 0.1)),
@@ -100,27 +100,16 @@ class BotConfig:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "stash_roi": {
-                "x": self.stash_roi.x,
-                "y": self.stash_roi.y,
-                "w": self.stash_roi.w,
-                "h": self.stash_roi.h,
+            "hero_row1": {
+                "first_cell": {"x": self.hero_row1.first_cell.x, "y": self.hero_row1.first_cell.y},
+                "last_cell": {"x": self.hero_row1.last_cell.x, "y": self.hero_row1.last_cell.y},
+                "cols": self.hero_row1.cols,
             },
-            "hero_bag_roi": {
-                "x": self.hero_bag_roi.x,
-                "y": self.hero_bag_roi.y,
-                "w": self.hero_bag_roi.w,
-                "h": self.hero_bag_roi.h,
-            },
-            "tab1": {"x": self.tab1[0], "y": self.tab1[1]},
-            "tab2": {"x": self.tab2[0], "y": self.tab2[1]},
-            "stash_grid": {"rows": self.stash_grid.rows, "cols": self.stash_grid.cols},
-            "hero_bag_grid": {
-                "rows": self.hero_bag_grid.rows,
-                "cols": self.hero_bag_grid.cols,
-            },
-            "empty_slot_template": "templates/stash_empty_slot.png",
+            "stash_last_slot": {"x": self.stash_last_slot.x, "y": self.stash_last_slot.y},
+            "stash_tabs": [{"x": tab.x, "y": tab.y} for tab in self.stash_tabs],
             "hero_bag_empty_slot_template": "templates/hero_bag_empty_slot.png",
+            "stash_last_slot_empty_template": "templates/stash_last_slot_empty.png",
+            "slot_crop_size": {"w": self.slot_crop_size.w, "h": self.slot_crop_size.h},
             "match_threshold": self.match_threshold,
             "action_delay_sec": self.action_delay_sec,
             "scan_delay_sec": self.scan_delay_sec,
@@ -143,24 +132,33 @@ def load_template_bgr(template_path: Path) -> np.ndarray:
     return _pil_to_bgr(image)
 
 
-def capture_roi(roi: ROI) -> np.ndarray:
-    screenshot = pyautogui.screenshot(region=(roi.x, roi.y, roi.w, roi.h))
+def hero_row1_centers(hero_row1: HeroRow1) -> list[tuple[int, int]]:
+    if hero_row1.cols <= 0:
+        raise ValueError("hero_row1.cols must be > 0")
+    if hero_row1.cols == 1:
+        return [(hero_row1.first_cell.x, hero_row1.first_cell.y)]
+
+    step_x = (hero_row1.last_cell.x - hero_row1.first_cell.x) / (hero_row1.cols - 1)
+    step_y = (hero_row1.last_cell.y - hero_row1.first_cell.y) / (hero_row1.cols - 1)
+    return [
+        (
+            int(round(hero_row1.first_cell.x + col * step_x)),
+            int(round(hero_row1.first_cell.y + col * step_y)),
+        )
+        for col in range(hero_row1.cols)
+    ]
+
+
+def slot_crop_region(center_x: int, center_y: int, crop_w: int, crop_h: int) -> tuple[int, int, int, int]:
+    left = center_x - crop_w // 2
+    top = center_y - crop_h // 2
+    return left, top, max(crop_w, 1), max(crop_h, 1)
+
+
+def capture_slot_image(center_x: int, center_y: int, crop_w: int, crop_h: int) -> np.ndarray:
+    left, top, width, height = slot_crop_region(center_x, center_y, crop_w, crop_h)
+    screenshot = pyautogui.screenshot(region=(left, top, width, height))
     return _pil_to_bgr(screenshot)
-
-
-def cell_bounds(roi: ROI, grid: GridSpec, row: int, col: int) -> tuple[int, int, int, int]:
-    cell_w = roi.w / grid.cols
-    cell_h = roi.h / grid.rows
-    x0 = int(col * cell_w)
-    y0 = int(row * cell_h)
-    x1 = int((col + 1) * cell_w) if col < grid.cols - 1 else roi.w
-    y1 = int((row + 1) * cell_h) if row < grid.rows - 1 else roi.h
-    return x0, y0, x1, y1
-
-
-def cell_center(roi: ROI, grid: GridSpec, row: int, col: int) -> tuple[int, int]:
-    x0, y0, x1, y1 = cell_bounds(roi, grid, row, col)
-    return roi.x + (x0 + x1) // 2, roi.y + (y0 + y1) // 2
 
 
 def match_score(cell_bgr: np.ndarray, template_bgr: np.ndarray) -> float:
@@ -181,74 +179,65 @@ def match_score(cell_bgr: np.ndarray, template_bgr: np.ndarray) -> float:
     return template_score
 
 
-def scan_grid(
-    roi: ROI,
-    grid: GridSpec,
+def slot_match_score(
+    center_x: int,
+    center_y: int,
     template_bgr: np.ndarray,
+    crop_size: Size,
+    slot_image: np.ndarray | None = None,
+) -> float:
+    image = slot_image
+    if image is None:
+        image = capture_slot_image(center_x, center_y, crop_size.w, crop_size.h)
+    return match_score(image, template_bgr)
+
+
+def is_slot_empty(
+    center_x: int,
+    center_y: int,
+    template_bgr: np.ndarray,
+    crop_size: Size,
     threshold: float,
-    roi_image: np.ndarray | None = None,
+    slot_image: np.ndarray | None = None,
+) -> bool:
+    score = slot_match_score(center_x, center_y, template_bgr, crop_size, slot_image)
+    return score >= threshold
+
+
+def find_hero_row1_items(
+    config: BotConfig,
+    hero_template_bgr: np.ndarray,
 ) -> list[Cell]:
-    image = roi_image if roi_image is not None else capture_roi(roi)
     cells: list[Cell] = []
-
-    for row in range(grid.rows):
-        for col in range(grid.cols):
-            x0, y0, x1, y1 = cell_bounds(roi, grid, row, col)
-            cell_img = image[y0:y1, x0:x1]
-            score = match_score(cell_img, template_bgr)
-            center_x, center_y = cell_center(roi, grid, row, col)
-            cells.append(
-                Cell(
-                    row=row,
-                    col=col,
-                    center_x=center_x,
-                    center_y=center_y,
-                    is_empty=score >= threshold,
-                    match_score=score,
-                )
+    for col, (center_x, center_y) in enumerate(hero_row1_centers(config.hero_row1)):
+        score = slot_match_score(
+            center_x,
+            center_y,
+            hero_template_bgr,
+            config.slot_crop_size,
+        )
+        is_empty = score >= config.match_threshold
+        cells.append(
+            Cell(
+                row=0,
+                col=col,
+                center_x=center_x,
+                center_y=center_y,
+                is_empty=is_empty,
+                match_score=score,
             )
-
-    return cells
-
-
-def count_empty_cells(
-    roi: ROI,
-    grid: GridSpec,
-    template_bgr: np.ndarray,
-    threshold: float,
-    roi_image: np.ndarray | None = None,
-) -> int:
-    cells = scan_grid(roi, grid, template_bgr, threshold, roi_image)
-    return sum(1 for cell in cells if cell.is_empty)
-
-
-def find_item_cells(
-    roi: ROI,
-    grid: GridSpec,
-    template_bgr: np.ndarray,
-    threshold: float,
-    roi_image: np.ndarray | None = None,
-) -> list[Cell]:
-    cells = scan_grid(roi, grid, template_bgr, threshold, roi_image)
+        )
     return [cell for cell in cells if not cell.is_empty]
 
 
-def find_bag_item_cells(
-    hero_bag_roi: ROI,
-    hero_bag_grid: GridSpec,
-    hero_bag_empty_template_bgr: np.ndarray,
-    threshold: float,
-    roi_image: np.ndarray | None = None,
-) -> list[Cell]:
-    """Find items only inside the Hero bag grid (not equipment slots).
-
-    Requires hero_bag_roi to exclude the equipment area above the bag.
-    Uses a Hero-bag-specific empty-slot template so equipped gear is never scanned.
-    """
-    return find_item_cells(
-        hero_bag_roi,
-        hero_bag_grid,
-        hero_bag_empty_template_bgr,
-        threshold,
-        roi_image,
+def is_stash_full(
+    config: BotConfig,
+    stash_template_bgr: np.ndarray,
+) -> bool:
+    return not is_slot_empty(
+        config.stash_last_slot.x,
+        config.stash_last_slot.y,
+        stash_template_bgr,
+        config.slot_crop_size,
+        config.match_threshold,
     )

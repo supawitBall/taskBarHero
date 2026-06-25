@@ -1,85 +1,55 @@
-"""Unit tests for point-based slot detection logic."""
+"""Unit tests for color-based slot detection logic."""
 
 from __future__ import annotations
 
 import sys
 import unittest
 from pathlib import Path
-
-import numpy as np
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from grid_utils import HeroRow1, Point, Size, hero_row1_centers, is_slot_empty, match_score
+from grid_utils import BotConfig, Point, RGBColor, color_distance, is_same_empty_color, is_stash_full
 
 
-class GridUtilsTest(unittest.TestCase):
-    def test_hero_row1_centers_interpolates(self) -> None:
-        hero_row1 = HeroRow1(
-            first_cell=Point(x=0, y=100),
-            last_cell=Point(x=70, y=100),
-            cols=8,
-        )
-        centers = hero_row1_centers(hero_row1)
-        self.assertEqual(len(centers), 8)
-        self.assertEqual(centers[0], (0, 100))
-        self.assertEqual(centers[7], (70, 100))
-        self.assertEqual(centers[4], (40, 100))
+class ColorUtilsTest(unittest.TestCase):
+    def test_color_distance_identical(self) -> None:
+        color = RGBColor(r=40, g=42, b=38)
+        self.assertAlmostEqual(color_distance(color, color), 0.0)
 
-    def test_hero_row1_centers_single_col(self) -> None:
-        hero_row1 = HeroRow1(
-            first_cell=Point(x=10, y=20),
-            last_cell=Point(x=999, y=888),
-            cols=1,
-        )
-        self.assertEqual(hero_row1_centers(hero_row1), [(10, 20)])
+    def test_color_distance_different(self) -> None:
+        empty = RGBColor(r=40, g=42, b=38)
+        item = RGBColor(r=120, g=80, b=60)
+        self.assertGreater(color_distance(empty, item), 15)
 
-    def test_match_score_identical(self) -> None:
-        cell = np.full((20, 20, 3), 40, dtype=np.uint8)
-        template = np.full((20, 20, 3), 40, dtype=np.uint8)
-        self.assertAlmostEqual(match_score(cell, template), 1.0, places=2)
+    def test_is_same_empty_color_within_tolerance(self) -> None:
+        reference = RGBColor(r=40, g=42, b=38)
+        close = RGBColor(r=42, g=44, b=40)
+        self.assertTrue(is_same_empty_color(close, reference, 15))
 
-    def test_is_slot_empty_with_provided_image(self) -> None:
-        template = np.full((10, 10, 3), 40, dtype=np.uint8)
-        empty_image = np.full((10, 10, 3), 40, dtype=np.uint8)
-        full_image = np.full((10, 10, 3), 200, dtype=np.uint8)
-        crop_size = Size(w=10, h=10)
+    def test_is_same_empty_color_outside_tolerance(self) -> None:
+        reference = RGBColor(r=40, g=42, b=38)
+        item = RGBColor(r=120, g=80, b=60)
+        self.assertFalse(is_same_empty_color(item, reference, 15))
 
-        self.assertTrue(
-            is_slot_empty(0, 0, template, crop_size, 0.85, slot_image=empty_image)
-        )
-        self.assertFalse(
-            is_slot_empty(0, 0, template, crop_size, 0.85, slot_image=full_image)
+    def test_is_stash_full_when_color_differs(self) -> None:
+        config = BotConfig(
+            hero_slots=[Point(x=0, y=0)] * 7,
+            stash_last_slot=Point(x=100, y=100),
+            stash_tabs=[Point(x=0, y=0), Point(x=1, y=1), Point(x=2, y=2)],
+            empty_slot_color=RGBColor(r=40, g=42, b=38),
+            color_tolerance=15,
+            sample_size=5,
+            action_delay_sec=0.25,
+            scan_delay_sec=0.1,
+            stash_tab_switch_delay_sec=0.6,
         )
 
-    def test_stash_full_threshold_logic(self) -> None:
-        template = np.full((10, 10, 3), 40, dtype=np.uint8)
-        empty_image = np.full((10, 10, 3), 40, dtype=np.uint8)
-        full_image = np.full((10, 10, 3), 200, dtype=np.uint8)
-        threshold = 0.85
+        with patch("grid_utils.stash_last_slot_color", return_value=RGBColor(r=120, g=80, b=60)):
+            self.assertTrue(is_stash_full(config))
 
-        self.assertGreaterEqual(match_score(empty_image, template), threshold)
-        self.assertLess(match_score(full_image, template), threshold)
-
-    def test_hero_row1_col_offset_and_crop(self) -> None:
-        from grid_utils import crop_hero_row1_cell, hero_row1_col_offset_x
-
-        hero_row1 = HeroRow1(
-            first_cell=Point(x=100, y=200),
-            last_cell=Point(x=700, y=200),
-            cols=8,
-        )
-        crop_size = Size(w=20, h=20)
-        strip = np.zeros((20, 620, 3), dtype=np.uint8)
-
-        for col in range(8):
-            offset = hero_row1_col_offset_x(hero_row1, col)
-            strip[0:20, offset : offset + 20, :] = (col + 1) * 10
-
-        for col in range(8):
-            cell = crop_hero_row1_cell(strip, hero_row1, col, crop_size)
-            expected = (col + 1) * 10
-            self.assertTrue(np.all(cell[:, :, 0] == expected), f"col {col} crop misaligned")
+        with patch("grid_utils.stash_last_slot_color", return_value=RGBColor(r=41, g=43, b=39)):
+            self.assertFalse(is_stash_full(config))
 
 
 if __name__ == "__main__":

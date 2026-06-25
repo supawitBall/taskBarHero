@@ -1,16 +1,19 @@
-"""Point-based slot detection for hero row 1 and stash last slot."""
+"""Color-based slot detection for hero slots and stash last slot."""
 
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import cv2
 import numpy as np
 import pyautogui
-from PIL import Image
+
+
+HERO_SLOT_COUNT = 7
+STASH_TAB_COUNT = 3
 
 
 @dataclass(frozen=True)
@@ -24,20 +27,17 @@ class Point:
 
 
 @dataclass(frozen=True)
-class Size:
-    w: int
-    h: int
+class RGBColor:
+    r: int
+    g: int
+    b: int
 
     @classmethod
-    def from_dict(cls, data: dict[str, int]) -> "Size":
-        return cls(w=data["w"], h=data["h"])
+    def from_dict(cls, data: dict[str, int]) -> "RGBColor":
+        return cls(r=data["r"], g=data["g"], b=data["b"])
 
-
-@dataclass(frozen=True)
-class HeroRow1:
-    first_cell: Point
-    last_cell: Point
-    cols: int
+    def __str__(self) -> str:
+        return f"RGB({self.r}, {self.g}, {self.b})"
 
 
 @dataclass(frozen=True)
@@ -47,27 +47,18 @@ class Cell:
     center_x: int
     center_y: int
     is_empty: bool
-    match_score: float
-
-
-def _resolve_template(base_dir: Path, key: str, data: dict[str, Any]) -> Path:
-    template = Path(data[key])
-    if not template.is_absolute():
-        template = base_dir / template
-    return template
+    color: RGBColor
+    color_distance: float
 
 
 @dataclass
 class BotConfig:
-    hero_row1: HeroRow1
+    hero_slots: list[Point]
     stash_last_slot: Point
     stash_tabs: list[Point]
-    hero_bag_empty_slot_template: Path
-    stash_last_slot_empty_template: Path
-    slot_crop_size: Size
-    match_threshold: float
-    hero_empty_threshold: float
-    stash_empty_threshold: float
+    empty_slot_color: RGBColor
+    color_tolerance: float
+    sample_size: int
     action_delay_sec: float
     scan_delay_sec: float
     stash_tab_switch_delay_sec: float
@@ -78,31 +69,13 @@ class BotConfig:
         with path.open(encoding="utf-8") as f:
             data = json.load(f)
 
-        base_dir = path.parent
-        hero_data = data["hero_row1"]
-
         return cls(
-            hero_row1=HeroRow1(
-                first_cell=Point.from_dict(hero_data["first_cell"]),
-                last_cell=Point.from_dict(hero_data["last_cell"]),
-                cols=int(hero_data["cols"]),
-            ),
+            hero_slots=[Point.from_dict(slot) for slot in data["hero_slots"]],
             stash_last_slot=Point.from_dict(data["stash_last_slot"]),
             stash_tabs=[Point.from_dict(tab) for tab in data["stash_tabs"]],
-            hero_bag_empty_slot_template=_resolve_template(
-                base_dir, "hero_bag_empty_slot_template", data
-            ),
-            stash_last_slot_empty_template=_resolve_template(
-                base_dir, "stash_last_slot_empty_template", data
-            ),
-            slot_crop_size=Size.from_dict(data["slot_crop_size"]),
-            match_threshold=float(data.get("match_threshold", 0.85)),
-            hero_empty_threshold=float(
-                data.get("hero_empty_threshold", data.get("match_threshold", 0.85))
-            ),
-            stash_empty_threshold=float(
-                data.get("stash_empty_threshold", data.get("match_threshold", 0.85))
-            ),
+            empty_slot_color=RGBColor.from_dict(data["empty_slot_color"]),
+            color_tolerance=float(data.get("color_tolerance", 15)),
+            sample_size=int(data.get("sample_size", 5)),
             action_delay_sec=float(data.get("action_delay_sec", 0.25)),
             scan_delay_sec=float(data.get("scan_delay_sec", 0.1)),
             stash_tab_switch_delay_sec=float(data.get("stash_tab_switch_delay_sec", 0.6)),
@@ -110,19 +83,16 @@ class BotConfig:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "hero_row1": {
-                "first_cell": {"x": self.hero_row1.first_cell.x, "y": self.hero_row1.first_cell.y},
-                "last_cell": {"x": self.hero_row1.last_cell.x, "y": self.hero_row1.last_cell.y},
-                "cols": self.hero_row1.cols,
-            },
+            "hero_slots": [{"x": slot.x, "y": slot.y} for slot in self.hero_slots],
             "stash_last_slot": {"x": self.stash_last_slot.x, "y": self.stash_last_slot.y},
             "stash_tabs": [{"x": tab.x, "y": tab.y} for tab in self.stash_tabs],
-            "hero_bag_empty_slot_template": "templates/hero_bag_empty_slot.png",
-            "stash_last_slot_empty_template": "templates/stash_last_slot_empty.png",
-            "slot_crop_size": {"w": self.slot_crop_size.w, "h": self.slot_crop_size.h},
-            "match_threshold": self.match_threshold,
-            "hero_empty_threshold": self.hero_empty_threshold,
-            "stash_empty_threshold": self.stash_empty_threshold,
+            "empty_slot_color": {
+                "r": self.empty_slot_color.r,
+                "g": self.empty_slot_color.g,
+                "b": self.empty_slot_color.b,
+            },
+            "color_tolerance": self.color_tolerance,
+            "sample_size": self.sample_size,
             "action_delay_sec": self.action_delay_sec,
             "scan_delay_sec": self.scan_delay_sec,
             "stash_tab_switch_delay_sec": self.stash_tab_switch_delay_sec,
@@ -135,167 +105,64 @@ class BotConfig:
             f.write("\n")
 
 
-def _pil_to_bgr(image: Image.Image) -> np.ndarray:
-    rgb = np.array(image.convert("RGB"))
-    return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
-
-
-def load_template_bgr(template_path: Path) -> np.ndarray:
-    image = Image.open(template_path)
-    return _pil_to_bgr(image)
-
-
-def hero_row1_centers(hero_row1: HeroRow1) -> list[tuple[int, int]]:
-    if hero_row1.cols <= 0:
-        raise ValueError("hero_row1.cols must be > 0")
-    if hero_row1.cols == 1:
-        return [(hero_row1.first_cell.x, hero_row1.first_cell.y)]
-
-    step_x = (hero_row1.last_cell.x - hero_row1.first_cell.x) / (hero_row1.cols - 1)
-    step_y = (hero_row1.last_cell.y - hero_row1.first_cell.y) / (hero_row1.cols - 1)
-    return [
-        (
-            int(round(hero_row1.first_cell.x + col * step_x)),
-            int(round(hero_row1.first_cell.y + col * step_y)),
-        )
-        for col in range(hero_row1.cols)
-    ]
-
-
-def slot_crop_region(center_x: int, center_y: int, crop_w: int, crop_h: int) -> tuple[int, int, int, int]:
-    left = center_x - crop_w // 2
-    top = center_y - crop_h // 2
-    return left, top, max(crop_w, 1), max(crop_h, 1)
-
-
-def capture_slot_image(center_x: int, center_y: int, crop_w: int, crop_h: int) -> np.ndarray:
-    left, top, width, height = slot_crop_region(center_x, center_y, crop_w, crop_h)
+def sample_region(left: int, top: int, width: int, height: int) -> np.ndarray:
     screenshot = pyautogui.screenshot(region=(left, top, width, height))
-    return _pil_to_bgr(screenshot)
+    return np.array(screenshot.convert("RGB"))
 
 
-def match_score(cell_bgr: np.ndarray, template_bgr: np.ndarray) -> float:
-    if cell_bgr.size == 0 or template_bgr.size == 0:
-        return 0.0
-
-    cell_h, cell_w = cell_bgr.shape[:2]
-    template_resized = cv2.resize(template_bgr, (cell_w, cell_h), interpolation=cv2.INTER_AREA)
-
-    diff = cv2.absdiff(cell_bgr, template_resized)
-    pixel_score = 1.0 - (float(diff.mean()) / 255.0)
-
-    result = cv2.matchTemplate(cell_bgr, template_resized, cv2.TM_CCOEFF_NORMED)
-    template_score = float(result[0][0])
-    if not np.isfinite(template_score) or template_score <= 0.01:
-        return pixel_score
-
-    return template_score
+def sample_slot_color(x: int, y: int, sample_size: int = 5) -> RGBColor:
+    half = sample_size // 2
+    left = x - half
+    top = y - half
+    pixels = sample_region(left, top, sample_size, sample_size)
+    mean = pixels.mean(axis=(0, 1))
+    return RGBColor(r=int(round(mean[0])), g=int(round(mean[1])), b=int(round(mean[2])))
 
 
-def slot_match_score(
-    center_x: int,
-    center_y: int,
-    template_bgr: np.ndarray,
-    crop_size: Size,
-    slot_image: np.ndarray | None = None,
-) -> float:
-    image = slot_image
-    if image is None:
-        image = capture_slot_image(center_x, center_y, crop_size.w, crop_size.h)
-    return match_score(image, template_bgr)
+def color_distance(a: RGBColor, b: RGBColor) -> float:
+    return math.sqrt((a.r - b.r) ** 2 + (a.g - b.g) ** 2 + (a.b - b.b) ** 2)
 
 
-def is_slot_empty(
-    center_x: int,
-    center_y: int,
-    template_bgr: np.ndarray,
-    crop_size: Size,
-    threshold: float,
-    slot_image: np.ndarray | None = None,
-) -> bool:
-    score = slot_match_score(center_x, center_y, template_bgr, crop_size, slot_image)
-    return score >= threshold
+def is_same_empty_color(current: RGBColor, reference: RGBColor, tolerance: float) -> bool:
+    return color_distance(current, reference) <= tolerance
 
 
-def hero_row1_col_offset_x(hero_row1: HeroRow1, col: int) -> int:
-    if hero_row1.cols <= 1:
-        return 0
-    span = hero_row1.last_cell.x - hero_row1.first_cell.x
-    return int(round(col * span / (hero_row1.cols - 1)))
-
-
-def capture_hero_row1_strip(config: BotConfig) -> np.ndarray:
-    hero = config.hero_row1
-    crop_w = config.slot_crop_size.w
-    crop_h = config.slot_crop_size.h
-    left = hero.first_cell.x - crop_w // 2
-    top = hero.first_cell.y - crop_h // 2
-    width = (hero.last_cell.x - hero.first_cell.x) + crop_w
-    height = crop_h
-    screenshot = pyautogui.screenshot(region=(left, top, width, height))
-    return _pil_to_bgr(screenshot)
-
-
-def crop_hero_row1_cell(
-    strip: np.ndarray,
-    hero_row1: HeroRow1,
-    col: int,
-    crop_size: Size,
-) -> np.ndarray:
-    offset_x = hero_row1_col_offset_x(hero_row1, col)
-    return strip[0 : crop_size.h, offset_x : offset_x + crop_size.w]
-
-
-def scan_hero_row1_cells(
-    config: BotConfig,
-    hero_template_bgr: np.ndarray,
-    row_strip: np.ndarray | None = None,
-) -> list[Cell]:
-    strip = row_strip if row_strip is not None else capture_hero_row1_strip(config)
+def scan_hero_cells(config: BotConfig) -> list[Cell]:
     cells: list[Cell] = []
-
-    for col, (center_x, center_y) in enumerate(hero_row1_centers(config.hero_row1)):
-        cell_img = crop_hero_row1_cell(strip, config.hero_row1, col, config.slot_crop_size)
-        score = match_score(cell_img, hero_template_bgr)
-        is_empty = score >= config.hero_empty_threshold
+    for col, slot in enumerate(config.hero_slots):
+        current_color = sample_slot_color(slot.x, slot.y, config.sample_size)
+        distance = color_distance(current_color, config.empty_slot_color)
+        is_empty = distance <= config.color_tolerance
         cells.append(
             Cell(
                 row=0,
                 col=col,
-                center_x=center_x,
-                center_y=center_y,
+                center_x=slot.x,
+                center_y=slot.y,
                 is_empty=is_empty,
-                match_score=score,
+                color=current_color,
+                color_distance=distance,
             )
         )
-
     return cells
 
 
-def find_hero_row1_items(
-    config: BotConfig,
-    hero_template_bgr: np.ndarray,
-    row_strip: np.ndarray | None = None,
-) -> list[Cell]:
-    cells = scan_hero_row1_cells(config, hero_template_bgr, row_strip)
-    return [cell for cell in cells if not cell.is_empty]
+def find_hero_items(config: BotConfig) -> list[Cell]:
+    return [cell for cell in scan_hero_cells(config) if not cell.is_empty]
 
 
-def stash_last_slot_score(
-    config: BotConfig,
-    stash_template_bgr: np.ndarray,
-) -> float:
-    return slot_match_score(
+def stash_last_slot_color(config: BotConfig) -> RGBColor:
+    return sample_slot_color(
         config.stash_last_slot.x,
         config.stash_last_slot.y,
-        stash_template_bgr,
-        config.slot_crop_size,
+        config.sample_size,
     )
 
 
-def is_stash_full(
-    config: BotConfig,
-    stash_template_bgr: np.ndarray,
-) -> bool:
-    score = stash_last_slot_score(config, stash_template_bgr)
-    return score < config.stash_empty_threshold
+def is_stash_full(config: BotConfig) -> bool:
+    current = stash_last_slot_color(config)
+    return not is_same_empty_color(
+        current,
+        config.empty_slot_color,
+        config.color_tolerance,
+    )

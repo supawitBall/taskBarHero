@@ -1,17 +1,22 @@
 {
-  "hero_row1": {
-    "first_cell": { "x": 0, "y": 0 },
-    "last_cell": { "x": 0, "y": 0 },
-    "cols": 8
-  },
+  "hero_slots": [
+    { "x": 0, "y": 0 },
+    { "x": 0, "y": 0 },
+    { "x": 0, "y": 0 },
+    { "x": 0, "y": 0 },
+    { "x": 0, "y": 0 },
+    { "x": 0, "y": 0 },
+    { "x": 0, "y": 0 }
+  ],
   "stash_last_slot": { "x": 0, "y": 0 },
-  "stash_tabs": [{ "x": 0, "y": 0 }],
-  "hero_bag_empty_slot_template": "templates/hero_bag_empty_slot.png",
-  "stash_last_slot_empty_template": "templates/stash_last_slot_empty.png",
-  "slot_crop_size": { "w": 0, "h": 0 },
-  "match_threshold": 0.85,
-  "hero_empty_threshold": 0.82,
-  "stash_empty_threshold": 0.85,
+  "stash_tabs": [
+    { "x": 0, "y": 0 },
+    { "x": 0, "y": 0 },
+    { "x": 0, "y": 0 }
+  ],
+  "empty_slot_color": { "r": 0, "g": 0, "b": 0 },
+  "color_tolerance": 15,
+  "sample_size": 5,
   "action_delay_sec": 0.25,
   "scan_delay_sec": 0.1,
   "stash_tab_switch_delay_sec": 0.6

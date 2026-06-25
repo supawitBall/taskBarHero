@@ -1,4 +1,4 @@
-"""Interactive point-based calibration for hero row 1 and multi-stash tabs."""
+"""Interactive color-based calibration for hero slots and stash tabs."""
 
 from __future__ import annotations
 
@@ -9,12 +9,16 @@ from pathlib import Path
 
 import pyautogui
 
-from grid_utils import BotConfig, HeroRow1, Point, Size, slot_crop_region
+from grid_utils import (
+    HERO_SLOT_COUNT,
+    STASH_TAB_COUNT,
+    BotConfig,
+    Point,
+    sample_slot_color,
+)
 
 BASE_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = BASE_DIR / "config.json"
-HERO_BAG_TEMPLATE_PATH = BASE_DIR / "templates" / "hero_bag_empty_slot.png"
-STASH_LAST_SLOT_TEMPLATE_PATH = BASE_DIR / "templates" / "stash_last_slot_empty.png"
 
 
 def prompt(text: str, default: str | None = None) -> str:
@@ -56,20 +60,6 @@ def wait_for_click(label: str) -> tuple[int, int]:
     return pos.x, pos.y
 
 
-def capture_slot_template(
-    center_x: int,
-    center_y: int,
-    crop_w: int,
-    crop_h: int,
-    output_path: Path,
-) -> None:
-    left, top, width, height = slot_crop_region(center_x, center_y, crop_w, crop_h)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    image = pyautogui.screenshot(region=(left, top, width, height))
-    image.save(output_path)
-    print(f"  บันทึก template: {output_path} ({width}x{height}px)")
-
-
 def load_defaults() -> dict:
     if not CONFIG_PATH.exists():
         return {}
@@ -81,12 +71,11 @@ def main() -> int:
     pyautogui.FAILSAFE = True
 
     print("=" * 60)
-    print("TaskBarHero - Point-based Calibration")
+    print("TaskBarHero - Color-based Calibration")
     print("=" * 60)
     print("เตรียมเกมให้พร้อม:")
     print("  - หน้าต่าง STASH (ซ้าย) และ HERO (ขวา) เปิดคู่กัน")
-    print("  - Hero row 1 ควรว่าง (ไม่มีไอเทม) ตอนแคป template")
-    print("  - Stash ช่องสุดท้ายควรว่าง ตอนแคป template")
+    print("  - มีช่องว่างอย่างน้อย 1 ช่อง สำหรับเก็บสี")
     print("  - ขนาดหน้าต่างเกมคงที่ + Windows scaling 100%")
     print("  - ขยับเมาส์ไปมุมจอเพื่อหยุดฉุกเฉิน (FAILSAFE)")
     print()
@@ -97,62 +86,34 @@ def main() -> int:
         time.sleep(1)
 
     defaults = load_defaults()
-    hero_defaults = defaults.get("hero_row1", {})
 
     try:
-        print("\n=== Hero bag row 1 ===")
-        print("  สำคัญ: เลือกเฉพาะตารางกระเป๋า row 1 (ไม่รวม equipment)")
-        print("  สำคัญ: คลิกกลางช่องที่ 1 และช่องสุดท้ายของ row 1 ให้ตรงเป๊ะ")
-        hero_first = wait_for_click("คลิกกลางช่องที่ 1 row 1 ของกระเป๋า Hero")
-        hero_last = wait_for_click("คลิกกลางช่องสุดท้าย row 1 ของกระเป๋า Hero")
-        hero_cols = prompt_int("Hero row 1 cols (จำนวนช่องในแถว)", hero_defaults.get("cols", 8))
+        print("\n=== Hero ช่อง 1-7 ===")
+        print("  สำคัญ: คลิกกลางช่อง row 1 ของกระเป๋า Hero (ไม่รวม equipment)")
+        hero_slots: list[Point] = []
+        for slot_num in range(1, HERO_SLOT_COUNT + 1):
+            pos = wait_for_click(f"คลิกกลาง Hero ช่อง {slot_num}")
+            hero_slots.append(Point(x=pos[0], y=pos[1]))
 
-        print("\n  คลิกช่องว่าง row 1 หนึ่งช่องเพื่อแคป hero empty template")
-        hero_empty = wait_for_click("คลิกกลางช่องว่าง row 1 ในกระเป๋า Hero")
-
-        crop_w = prompt_int("slot crop width (px)", defaults.get("slot_crop_size", {}).get("w", 40))
-        crop_h = prompt_int("slot crop height (px)", defaults.get("slot_crop_size", {}).get("h", 40))
-        slot_crop_size = Size(w=crop_w, h=crop_h)
-
-        capture_slot_template(
-            hero_empty[0],
-            hero_empty[1],
-            crop_w,
-            crop_h,
-            HERO_BAG_TEMPLATE_PATH,
-        )
-
-        print("\n=== Stash last slot ===")
-        print("  เปิด Stash tab แรก และให้ช่องสุดท้ายว่าง")
+        print("\n=== Stash ช่องสุดท้าย ===")
         stash_last = wait_for_click("คลิกกลางช่องสุดท้ายของ Stash")
-        capture_slot_template(
-            stash_last[0],
-            stash_last[1],
-            crop_w,
-            crop_h,
-            STASH_LAST_SLOT_TEMPLATE_PATH,
-        )
 
-        stash_count = prompt_int(
-            "จำนวน Stash (tabs)",
-            len(defaults.get("stash_tabs", [])) or 2,
-        )
+        print("\n=== Stash tab 1-3 ===")
         stash_tabs: list[Point] = []
-        for index in range(stash_count):
-            tab_pos = wait_for_click(f"คลิกปุ่ม Stash tab {index + 1}")
-            stash_tabs.append(Point(x=tab_pos[0], y=tab_pos[1]))
+        for tab_num in range(1, STASH_TAB_COUNT + 1):
+            pos = wait_for_click(f"คลิก Stash tab {tab_num}")
+            stash_tabs.append(Point(x=pos[0], y=pos[1]))
 
-        match_threshold = prompt_float(
-            "match_threshold (0-1)",
-            defaults.get("match_threshold", 0.85),
-        )
-        hero_empty_threshold = prompt_float(
-            "hero_empty_threshold (score ต่ำกว่านี้ = มี item)",
-            defaults.get("hero_empty_threshold", 0.82),
-        )
-        stash_empty_threshold = prompt_float(
-            "stash_empty_threshold (score ต่ำกว่านี้ = Stash เต็ม)",
-            defaults.get("stash_empty_threshold", match_threshold),
+        print("\n=== สีช่องว่าง ===")
+        print("  คลิกกลางช่องว่าง (Hero หรือ Stash) เพื่อเก็บสี reference")
+        empty_pos = wait_for_click("คลิกกลางช่องว่าง")
+        sample_size = prompt_int("sample_size (px)", defaults.get("sample_size", 5))
+        empty_color = sample_slot_color(empty_pos[0], empty_pos[1], sample_size)
+        print(f"  บันทึกสีช่องว่าง: {empty_color}")
+
+        color_tolerance = prompt_float(
+            "color_tolerance (ยิ่งสูงยิ่งยอมรับสีใกล้เคียง)",
+            defaults.get("color_tolerance", 15),
         )
         action_delay = prompt_float(
             "action_delay_sec",
@@ -168,19 +129,12 @@ def main() -> int:
         )
 
         config = BotConfig(
-            hero_row1=HeroRow1(
-                first_cell=Point(x=hero_first[0], y=hero_first[1]),
-                last_cell=Point(x=hero_last[0], y=hero_last[1]),
-                cols=hero_cols,
-            ),
+            hero_slots=hero_slots,
             stash_last_slot=Point(x=stash_last[0], y=stash_last[1]),
             stash_tabs=stash_tabs,
-            hero_bag_empty_slot_template=HERO_BAG_TEMPLATE_PATH,
-            stash_last_slot_empty_template=STASH_LAST_SLOT_TEMPLATE_PATH,
-            slot_crop_size=slot_crop_size,
-            match_threshold=match_threshold,
-            hero_empty_threshold=hero_empty_threshold,
-            stash_empty_threshold=stash_empty_threshold,
+            empty_slot_color=empty_color,
+            color_tolerance=color_tolerance,
+            sample_size=sample_size,
             action_delay_sec=action_delay,
             scan_delay_sec=scan_delay,
             stash_tab_switch_delay_sec=stash_tab_switch_delay,
@@ -189,9 +143,9 @@ def main() -> int:
 
         print("\nCalibration เสร็จแล้ว!")
         print(f"  config: {CONFIG_PATH}")
-        print(f"  hero template: {HERO_BAG_TEMPLATE_PATH}")
-        print(f"  stash last-slot template: {STASH_LAST_SLOT_TEMPLATE_PATH}")
-        print(f"  stash tabs: {stash_count} แท็บ")
+        print(f"  hero slots: {HERO_SLOT_COUNT} ช่อง")
+        print(f"  stash tabs: {STASH_TAB_COUNT} แท็บ")
+        print(f"  empty color: {empty_color}")
         print("\nรันบอทด้วย: python bot.py")
         return 0
     except KeyboardInterrupt:

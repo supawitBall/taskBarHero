@@ -1,4 +1,4 @@
-"""Main bot loop: move items from Hero row 1 to Stash tabs."""
+"""Main bot loop: move items from Hero slots to Stash tabs using color detection."""
 
 from __future__ import annotations
 
@@ -9,11 +9,13 @@ from pathlib import Path
 import pyautogui
 
 from grid_utils import (
+    HERO_SLOT_COUNT,
+    STASH_TAB_COUNT,
     BotConfig,
-    find_hero_row1_items,
-    load_template_bgr,
-    scan_hero_row1_cells,
-    stash_last_slot_score,
+    color_distance,
+    find_hero_items,
+    scan_hero_cells,
+    stash_last_slot_color,
 )
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -50,22 +52,15 @@ def check_stop() -> None:
 
 
 def validate_config(config: BotConfig) -> None:
-    if not config.hero_bag_empty_slot_template.exists():
-        raise FileNotFoundError(
-            f"ไม่พบ hero template: {config.hero_bag_empty_slot_template}\n"
-            "รัน python calibrate.py ก่อน"
-        )
-    if not config.stash_last_slot_empty_template.exists():
-        raise FileNotFoundError(
-            f"ไม่พบ stash template: {config.stash_last_slot_empty_template}\n"
-            "รัน python calibrate.py ก่อน"
-        )
-    if config.hero_row1.cols <= 0:
-        raise ValueError("hero_row1.cols ต้องมากกว่า 0")
-    if not config.stash_tabs:
-        raise ValueError("stash_tabs ว่าง — รัน python calibrate.py ใหม่")
-    if config.slot_crop_size.w <= 0 or config.slot_crop_size.h <= 0:
-        raise ValueError("slot_crop_size ยังไม่ได้ calibrate (w/h = 0)")
+    if len(config.hero_slots) != HERO_SLOT_COUNT:
+        raise ValueError(f"hero_slots ต้องมี {HERO_SLOT_COUNT} ช่อง — รัน python calibrate.py ใหม่")
+    if len(config.stash_tabs) != STASH_TAB_COUNT:
+        raise ValueError(f"stash_tabs ต้องมี {STASH_TAB_COUNT} แท็บ — รัน python calibrate.py ใหม่")
+    for index, slot in enumerate(config.hero_slots, start=1):
+        if slot.x <= 0 and slot.y <= 0:
+            raise ValueError(f"hero slot {index} ยังไม่ได้ calibrate")
+    if config.stash_last_slot.x <= 0 and config.stash_last_slot.y <= 0:
+        raise ValueError("stash_last_slot ยังไม่ได้ calibrate")
 
 
 def switch_to_stash(index: int, config: BotConfig) -> None:
@@ -76,25 +71,22 @@ def switch_to_stash(index: int, config: BotConfig) -> None:
     time.sleep(config.stash_tab_switch_delay_sec)
 
 
-def ensure_stash_has_space(
-    config: BotConfig,
-    stash_template_bgr,
-    current_index: int,
-) -> tuple[int, bool]:
+def ensure_stash_has_space(config: BotConfig, current_index: int) -> tuple[int, bool]:
     while True:
-        score = stash_last_slot_score(config, stash_template_bgr)
-        is_full = score < config.stash_empty_threshold
+        current_color = stash_last_slot_color(config)
+        dist = color_distance(current_color, config.empty_slot_color)
+        stash_is_full = dist > config.color_tolerance
 
-        if not is_full:
+        if not stash_is_full:
             print(
                 f"Stash tab {current_index + 1} มีที่ว่าง "
-                f"(ช่องสุดท้าย score={score:.2f})"
+                f"({current_color} ≈ empty {config.empty_slot_color}, dist={dist:.1f})"
             )
             return current_index, True
 
         print(
             f"Stash tab {current_index + 1} เต็ม "
-            f"(ช่องสุดท้าย score={score:.2f})"
+            f"({current_color} ≠ empty {config.empty_slot_color}, dist={dist:.1f})"
         )
 
         if current_index >= len(config.stash_tabs) - 1:
@@ -107,36 +99,32 @@ def ensure_stash_has_space(
         current_index = next_index
 
 
-def log_hero_row1_scan(config: BotConfig, hero_template_bgr) -> None:
-    cells = scan_hero_row1_cells(config, hero_template_bgr)
-    print("  สแกน Hero row 1:")
+def log_hero_scan(config: BotConfig) -> None:
+    cells = scan_hero_cells(config)
+    print("  สแกน Hero ช่อง 1-7:")
     for cell in cells:
         status = "item" if not cell.is_empty else "ว่าง"
         print(
-            f"    ช่อง {cell.col + 1}: score={cell.match_score:.2f} ({status}) "
-            f"@ ({cell.center_x}, {cell.center_y})"
+            f"    ช่อง {cell.col + 1}: {cell.color} dist={cell.color_distance:.1f} ({status})"
         )
 
 
 def run_bot(config: BotConfig) -> None:
-    stash_template_bgr = load_template_bgr(config.stash_last_slot_empty_template)
-    hero_template_bgr = load_template_bgr(config.hero_bag_empty_slot_template)
     current_stash_index = 0
-    moved_count = 0
     stash_initialized = False
 
     print("เริ่มทำงาน (กด Esc เพื่อหยุด, ขยับเมาส์มุมจอ = FAILSAFE)")
-    print("สแกนเฉพาะ Hero row 1 — ไม่รวม equipment และ row อื่น")
+    print(f"empty color: {config.empty_slot_color}, tolerance: {config.color_tolerance}")
     time.sleep(0.5)
 
     while True:
         check_stop()
 
-        items = find_hero_row1_items(config, hero_template_bgr)
+        items = find_hero_items(config)
 
         if not items:
             print("ไม่พบ item ในกระเป๋า Hero")
-            log_hero_row1_scan(config, hero_template_bgr)
+            log_hero_scan(config)
             break
 
         if not stash_initialized:
@@ -146,7 +134,6 @@ def run_bot(config: BotConfig) -> None:
 
         current_stash_index, has_space = ensure_stash_has_space(
             config,
-            stash_template_bgr,
             current_stash_index,
         )
         if not has_space:
@@ -155,10 +142,9 @@ def run_bot(config: BotConfig) -> None:
         item = items[0]
         print(
             f"Right-click item ใน Hero ช่อง {item.col + 1} "
-            f"(score={item.match_score:.2f}) → Stash tab {current_stash_index + 1}"
+            f"({item.color}) → Stash tab {current_stash_index + 1}"
         )
         pyautogui.rightClick(item.center_x, item.center_y)
-        moved_count += 1
         time.sleep(config.action_delay_sec)
         time.sleep(config.scan_delay_sec)
 
@@ -179,9 +165,9 @@ def main() -> int:
         return 1
 
     print("=" * 60)
-    print("TaskBarHero - Stash Transfer Bot")
+    print("TaskBarHero - Stash Transfer Bot (Color-based)")
     print("=" * 60)
-    print("เตรียมเกม: เปิด STASH + HERO, มีไอเทมใน Hero row 1")
+    print("เตรียมเกม: เปิด STASH + HERO, มีไอเทมใน Hero ช่อง 1-7")
     print(f"หยุดด้วย: กด {STOP_KEY.upper()} หรือขยับเมาส์ไปมุมจอ")
     print()
 

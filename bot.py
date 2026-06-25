@@ -14,7 +14,6 @@ from grid_utils import (
     BotConfig,
     color_distance,
     find_hero_items,
-    scan_hero_cells,
     stash_last_slot_color,
 )
 
@@ -71,6 +70,21 @@ def switch_to_stash(index: int, config: BotConfig) -> None:
     time.sleep(config.stash_tab_switch_delay_sec)
 
 
+def is_final_stash_full(config: BotConfig) -> bool:
+    """Return True when the last slot on the final stash tab is full."""
+    last_index = len(config.stash_tabs) - 1
+    switch_to_stash(last_index, config)
+    current_color = stash_last_slot_color(config)
+    dist = color_distance(current_color, config.empty_slot_color)
+    is_full = dist > config.color_tolerance
+    if is_full:
+        print(
+            f"Stash tab {last_index + 1} (สุดท้าย) เต็ม "
+            f"({current_color} ≠ empty {config.empty_slot_color}, dist={dist:.1f})"
+        )
+    return is_full
+
+
 def ensure_stash_has_space(config: BotConfig, current_index: int) -> tuple[int, bool]:
     while True:
         current_color = stash_last_slot_color(config)
@@ -99,21 +113,12 @@ def ensure_stash_has_space(config: BotConfig, current_index: int) -> tuple[int, 
         current_index = next_index
 
 
-def log_hero_scan(config: BotConfig) -> None:
-    cells = scan_hero_cells(config)
-    print("  สแกน Hero ช่อง 1-7:")
-    for cell in cells:
-        status = "item" if not cell.is_empty else "ว่าง"
-        print(
-            f"    ช่อง {cell.col + 1}: {cell.color} dist={cell.color_distance:.1f} ({status})"
-        )
-
-
 def run_bot(config: BotConfig) -> None:
     current_stash_index = 0
     stash_initialized = False
 
     print("เริ่มทำงาน (กด Esc เพื่อหยุด, ขยับเมาส์มุมจอ = FAILSAFE)")
+    print("หยุดอัตโนมัติเฉพาะเมื่อ Stash tab สุดท้ายเต็ม")
     print(f"empty color: {config.empty_slot_color}, tolerance: {config.color_tolerance}")
     time.sleep(0.5)
 
@@ -123,9 +128,12 @@ def run_bot(config: BotConfig) -> None:
         items = find_hero_items(config)
 
         if not items:
-            print("ไม่พบ item ในกระเป๋า Hero")
-            log_hero_scan(config)
-            break
+            print("ไม่พบ item ในกระเป๋า Hero — รอ scan...")
+            if is_final_stash_full(config):
+                print(" ===== Item เต็มระบบหยุดทำงาน ===== ")
+                break
+            time.sleep(config.scan_delay_sec)
+            continue
 
         if not stash_initialized:
             switch_to_stash(0, config)
@@ -167,8 +175,8 @@ def main() -> int:
     print("=" * 60)
     print("TaskBarHero - Stash Transfer Bot (Color-based)")
     print("=" * 60)
-    print("เตรียมเกม: เปิด STASH + HERO, มีไอเทมใน Hero ช่อง 1-7")
-    print(f"หยุดด้วย: กด {STOP_KEY.upper()} หรือขยับเมาส์ไปมุมจอ")
+    print("เตรียมเกม: เปิด STASH + HERO (บอทจะรอ item ใน Hero ช่อง 1-7)")
+    print("หยุดอัตโนมัติ: Stash tab สุดท้ายเต็ม | หยุดเอง: Esc / FAILSAFE / Ctrl+C")
     print()
 
     countdown = 3

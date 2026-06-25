@@ -70,21 +70,6 @@ def switch_to_stash(index: int, config: BotConfig) -> None:
     time.sleep(config.stash_tab_switch_delay_sec)
 
 
-def is_final_stash_full(config: BotConfig) -> bool:
-    """Return True when the last slot on the final stash tab is full."""
-    last_index = len(config.stash_tabs) - 1
-    switch_to_stash(last_index, config)
-    current_color = stash_last_slot_color(config)
-    dist = color_distance(current_color, config.empty_slot_color)
-    is_full = dist > config.color_tolerance
-    if is_full:
-        print(
-            f"Stash tab {last_index + 1} (สุดท้าย) เต็ม "
-            f"({current_color} ≠ empty {config.empty_slot_color}, dist={dist:.1f})"
-        )
-    return is_full
-
-
 def ensure_stash_has_space(config: BotConfig, current_index: int) -> tuple[int, bool]:
     while True:
         current_color = stash_last_slot_color(config)
@@ -129,9 +114,6 @@ def run_bot(config: BotConfig) -> None:
 
         if not items:
             print("ไม่พบ item ในกระเป๋า Hero — รอ scan...")
-            if is_final_stash_full(config):
-                print(" ===== Item เต็มระบบหยุดทำงาน ===== ")
-                break
             time.sleep(config.scan_delay_sec)
             continue
 

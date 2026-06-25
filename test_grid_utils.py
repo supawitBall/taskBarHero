@@ -52,6 +52,35 @@ class GridUtilsTest(unittest.TestCase):
             is_slot_empty(0, 0, template, crop_size, 0.85, slot_image=full_image)
         )
 
+    def test_stash_full_threshold_logic(self) -> None:
+        template = np.full((10, 10, 3), 40, dtype=np.uint8)
+        empty_image = np.full((10, 10, 3), 40, dtype=np.uint8)
+        full_image = np.full((10, 10, 3), 200, dtype=np.uint8)
+        threshold = 0.85
+
+        self.assertGreaterEqual(match_score(empty_image, template), threshold)
+        self.assertLess(match_score(full_image, template), threshold)
+
+    def test_hero_row1_col_offset_and_crop(self) -> None:
+        from grid_utils import crop_hero_row1_cell, hero_row1_col_offset_x
+
+        hero_row1 = HeroRow1(
+            first_cell=Point(x=100, y=200),
+            last_cell=Point(x=700, y=200),
+            cols=8,
+        )
+        crop_size = Size(w=20, h=20)
+        strip = np.zeros((20, 620, 3), dtype=np.uint8)
+
+        for col in range(8):
+            offset = hero_row1_col_offset_x(hero_row1, col)
+            strip[0:20, offset : offset + 20, :] = (col + 1) * 10
+
+        for col in range(8):
+            cell = crop_hero_row1_cell(strip, hero_row1, col, crop_size)
+            expected = (col + 1) * 10
+            self.assertTrue(np.all(cell[:, :, 0] == expected), f"col {col} crop misaligned")
+
 
 if __name__ == "__main__":
     unittest.main()

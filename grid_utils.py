@@ -66,8 +66,11 @@ class BotConfig:
     stash_last_slot_empty_template: Path
     slot_crop_size: Size
     match_threshold: float
+    hero_empty_threshold: float
+    stash_empty_threshold: float
     action_delay_sec: float
     scan_delay_sec: float
+    stash_tab_switch_delay_sec: float
 
     @classmethod
     def load(cls, config_path: str | Path) -> "BotConfig":
@@ -94,8 +97,15 @@ class BotConfig:
             ),
             slot_crop_size=Size.from_dict(data["slot_crop_size"]),
             match_threshold=float(data.get("match_threshold", 0.85)),
+            hero_empty_threshold=float(
+                data.get("hero_empty_threshold", data.get("match_threshold", 0.85))
+            ),
+            stash_empty_threshold=float(
+                data.get("stash_empty_threshold", data.get("match_threshold", 0.85))
+            ),
             action_delay_sec=float(data.get("action_delay_sec", 0.25)),
             scan_delay_sec=float(data.get("scan_delay_sec", 0.1)),
+            stash_tab_switch_delay_sec=float(data.get("stash_tab_switch_delay_sec", 0.6)),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -111,8 +121,11 @@ class BotConfig:
             "stash_last_slot_empty_template": "templates/stash_last_slot_empty.png",
             "slot_crop_size": {"w": self.slot_crop_size.w, "h": self.slot_crop_size.h},
             "match_threshold": self.match_threshold,
+            "hero_empty_threshold": self.hero_empty_threshold,
+            "stash_empty_threshold": self.stash_empty_threshold,
             "action_delay_sec": self.action_delay_sec,
             "scan_delay_sec": self.scan_delay_sec,
+            "stash_tab_switch_delay_sec": self.stash_tab_switch_delay_sec,
         }
 
     def save(self, config_path: str | Path) -> None:
@@ -204,19 +217,47 @@ def is_slot_empty(
     return score >= threshold
 
 
-def find_hero_row1_items(
+def hero_row1_col_offset_x(hero_row1: HeroRow1, col: int) -> int:
+    if hero_row1.cols <= 1:
+        return 0
+    span = hero_row1.last_cell.x - hero_row1.first_cell.x
+    return int(round(col * span / (hero_row1.cols - 1)))
+
+
+def capture_hero_row1_strip(config: BotConfig) -> np.ndarray:
+    hero = config.hero_row1
+    crop_w = config.slot_crop_size.w
+    crop_h = config.slot_crop_size.h
+    left = hero.first_cell.x - crop_w // 2
+    top = hero.first_cell.y - crop_h // 2
+    width = (hero.last_cell.x - hero.first_cell.x) + crop_w
+    height = crop_h
+    screenshot = pyautogui.screenshot(region=(left, top, width, height))
+    return _pil_to_bgr(screenshot)
+
+
+def crop_hero_row1_cell(
+    strip: np.ndarray,
+    hero_row1: HeroRow1,
+    col: int,
+    crop_size: Size,
+) -> np.ndarray:
+    offset_x = hero_row1_col_offset_x(hero_row1, col)
+    return strip[0 : crop_size.h, offset_x : offset_x + crop_size.w]
+
+
+def scan_hero_row1_cells(
     config: BotConfig,
     hero_template_bgr: np.ndarray,
+    row_strip: np.ndarray | None = None,
 ) -> list[Cell]:
+    strip = row_strip if row_strip is not None else capture_hero_row1_strip(config)
     cells: list[Cell] = []
+
     for col, (center_x, center_y) in enumerate(hero_row1_centers(config.hero_row1)):
-        score = slot_match_score(
-            center_x,
-            center_y,
-            hero_template_bgr,
-            config.slot_crop_size,
-        )
-        is_empty = score >= config.match_threshold
+        cell_img = crop_hero_row1_cell(strip, config.hero_row1, col, config.slot_crop_size)
+        score = match_score(cell_img, hero_template_bgr)
+        is_empty = score >= config.hero_empty_threshold
         cells.append(
             Cell(
                 row=0,
@@ -227,17 +268,34 @@ def find_hero_row1_items(
                 match_score=score,
             )
         )
+
+    return cells
+
+
+def find_hero_row1_items(
+    config: BotConfig,
+    hero_template_bgr: np.ndarray,
+    row_strip: np.ndarray | None = None,
+) -> list[Cell]:
+    cells = scan_hero_row1_cells(config, hero_template_bgr, row_strip)
     return [cell for cell in cells if not cell.is_empty]
+
+
+def stash_last_slot_score(
+    config: BotConfig,
+    stash_template_bgr: np.ndarray,
+) -> float:
+    return slot_match_score(
+        config.stash_last_slot.x,
+        config.stash_last_slot.y,
+        stash_template_bgr,
+        config.slot_crop_size,
+    )
 
 
 def is_stash_full(
     config: BotConfig,
     stash_template_bgr: np.ndarray,
 ) -> bool:
-    return not is_slot_empty(
-        config.stash_last_slot.x,
-        config.stash_last_slot.y,
-        stash_template_bgr,
-        config.slot_crop_size,
-        config.match_threshold,
-    )
+    score = stash_last_slot_score(config, stash_template_bgr)
+    return score < config.stash_empty_threshold

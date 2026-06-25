@@ -10,6 +10,9 @@
   "stash_last_slot_empty_template": "templates/stash_last_slot_empty.png",
   "slot_crop_size": { "w": 0, "h": 0 },
   "match_threshold": 0.85,
+  "hero_empty_threshold": 0.82,
+  "stash_empty_threshold": 0.85,
   "action_delay_sec": 0.25,
-  "scan_delay_sec": 0.1
+  "scan_delay_sec": 0.1,
+  "stash_tab_switch_delay_sec": 0.6
 }

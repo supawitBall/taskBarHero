@@ -8,7 +8,13 @@ from pathlib import Path
 
 import pyautogui
 
-from grid_utils import BotConfig, find_hero_row1_items, is_stash_full, load_template_bgr
+from grid_utils import (
+    BotConfig,
+    find_hero_row1_items,
+    load_template_bgr,
+    scan_hero_row1_cells,
+    stash_last_slot_score,
+)
 
 BASE_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = BASE_DIR / "config.json"
@@ -64,8 +70,10 @@ def validate_config(config: BotConfig) -> None:
 
 def switch_to_stash(index: int, config: BotConfig) -> None:
     tab = config.stash_tabs[index]
+    print(f"  → คลิก Stash tab {index + 1} ที่ ({tab.x}, {tab.y})")
     pyautogui.click(tab.x, tab.y)
     time.sleep(config.action_delay_sec)
+    time.sleep(config.stash_tab_switch_delay_sec)
 
 
 def ensure_stash_has_space(
@@ -73,19 +81,41 @@ def ensure_stash_has_space(
     stash_template_bgr,
     current_index: int,
 ) -> tuple[int, bool]:
-    while is_stash_full(config, stash_template_bgr):
+    while True:
+        score = stash_last_slot_score(config, stash_template_bgr)
+        is_full = score < config.stash_empty_threshold
+
+        if not is_full:
+            print(
+                f"Stash tab {current_index + 1} มีที่ว่าง "
+                f"(ช่องสุดท้าย score={score:.2f})"
+            )
+            return current_index, True
+
+        print(
+            f"Stash tab {current_index + 1} เต็ม "
+            f"(ช่องสุดท้าย score={score:.2f})"
+        )
+
         if current_index >= len(config.stash_tabs) - 1:
             print(" ===== Item เต็มระบบหยุดทำงาน ===== ")
             return current_index, False
 
-        print(
-            f"Stash tab {current_index + 1} เต็ม → "
-            f"เปลี่ยนไป Stash tab {current_index + 2}"
-        )
-        current_index += 1
-        switch_to_stash(current_index, config)
+        next_index = current_index + 1
+        print(f"  → เปลี่ยนไป Stash tab {next_index + 1}")
+        switch_to_stash(next_index, config)
+        current_index = next_index
 
-    return current_index, True
+
+def log_hero_row1_scan(config: BotConfig, hero_template_bgr) -> None:
+    cells = scan_hero_row1_cells(config, hero_template_bgr)
+    print("  สแกน Hero row 1:")
+    for cell in cells:
+        status = "item" if not cell.is_empty else "ว่าง"
+        print(
+            f"    ช่อง {cell.col + 1}: score={cell.match_score:.2f} ({status}) "
+            f"@ ({cell.center_x}, {cell.center_y})"
+        )
 
 
 def run_bot(config: BotConfig) -> None:
@@ -106,6 +136,7 @@ def run_bot(config: BotConfig) -> None:
 
         if not items:
             print("ไม่พบ item ในกระเป๋า Hero")
+            log_hero_row1_scan(config, hero_template_bgr)
             break
 
         if not stash_initialized:
@@ -123,7 +154,7 @@ def run_bot(config: BotConfig) -> None:
 
         item = items[0]
         print(
-            f"Right-click item ใน Hero row 1 col={item.col} "
+            f"Right-click item ใน Hero ช่อง {item.col + 1} "
             f"(score={item.match_score:.2f}) → Stash tab {current_stash_index + 1}"
         )
         pyautogui.rightClick(item.center_x, item.center_y)

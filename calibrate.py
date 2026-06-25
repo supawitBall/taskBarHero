@@ -102,9 +102,10 @@ def main() -> int:
     try:
         print("\n=== Hero bag row 1 ===")
         print("  สำคัญ: เลือกเฉพาะตารางกระเป๋า row 1 (ไม่รวม equipment)")
-        hero_first = wait_for_click("คลิกกลางช่องแรก row 1 ของกระเป๋า Hero")
+        print("  สำคัญ: คลิกกลางช่องที่ 1 และช่องสุดท้ายของ row 1 ให้ตรงเป๊ะ")
+        hero_first = wait_for_click("คลิกกลางช่องที่ 1 row 1 ของกระเป๋า Hero")
         hero_last = wait_for_click("คลิกกลางช่องสุดท้าย row 1 ของกระเป๋า Hero")
-        hero_cols = prompt_int("Hero row 1 cols", hero_defaults.get("cols", 8))
+        hero_cols = prompt_int("Hero row 1 cols (จำนวนช่องในแถว)", hero_defaults.get("cols", 8))
 
         print("\n  คลิกช่องว่าง row 1 หนึ่งช่องเพื่อแคป hero empty template")
         hero_empty = wait_for_click("คลิกกลางช่องว่าง row 1 ในกระเป๋า Hero")
@@ -145,6 +146,14 @@ def main() -> int:
             "match_threshold (0-1)",
             defaults.get("match_threshold", 0.85),
         )
+        hero_empty_threshold = prompt_float(
+            "hero_empty_threshold (score ต่ำกว่านี้ = มี item)",
+            defaults.get("hero_empty_threshold", 0.82),
+        )
+        stash_empty_threshold = prompt_float(
+            "stash_empty_threshold (score ต่ำกว่านี้ = Stash เต็ม)",
+            defaults.get("stash_empty_threshold", match_threshold),
+        )
         action_delay = prompt_float(
             "action_delay_sec",
             defaults.get("action_delay_sec", 0.25),
@@ -152,6 +161,10 @@ def main() -> int:
         scan_delay = prompt_float(
             "scan_delay_sec",
             defaults.get("scan_delay_sec", 0.1),
+        )
+        stash_tab_switch_delay = prompt_float(
+            "stash_tab_switch_delay_sec (รอ UI หลังเปลี่ยน tab)",
+            defaults.get("stash_tab_switch_delay_sec", 0.6),
         )
 
         config = BotConfig(
@@ -166,8 +179,11 @@ def main() -> int:
             stash_last_slot_empty_template=STASH_LAST_SLOT_TEMPLATE_PATH,
             slot_crop_size=slot_crop_size,
             match_threshold=match_threshold,
+            hero_empty_threshold=hero_empty_threshold,
+            stash_empty_threshold=stash_empty_threshold,
             action_delay_sec=action_delay,
             scan_delay_sec=scan_delay,
+            stash_tab_switch_delay_sec=stash_tab_switch_delay,
         )
         config.save(CONFIG_PATH)
 
